@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Isekai World - VIP</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #87CEEB; }
+        #joystick-zone {
+            position: absolute; bottom: 50px; left: 50px;
+            width: 120px; height: 120px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%; border: 2px solid rgba(255, 255, 255, 0.5);
+            touch-action: none;
+        }
+        #joystick-knob {
+            position: absolute; top: 50%; left: 50%;
+            width: 50px; height: 50px;
+            background: rgba(255, 255, 255, 0.8);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #loading {
+            position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: white; font-family: sans-serif; font-size: 20px; font-weight: bold;
+            background: rgba(0,0,0,0.5); padding: 20px; border-radius: 10px;
+        }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+
+    <div id="loading">Đang triệu hồi thế giới...</div>
+    <div id="joystick-zone"><div id="joystick-knob"></div></div>
+
+    <script>
+        // 1. KHỞI TẠO CƠ BẢN
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // Bầu trời xanh
+        scene.fog = new THREE.Fog(0x87CEEB, 20, 100); // Sương mù xa xa
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true; // Bật bóng đổ
+        document.body.appendChild(renderer.domElement);
+
+        // Ánh sáng
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
+        scene.add(hemiLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // Biến toàn cục
+        let player, mixer, action;
+        const loader = new THREE.GLTFLoader();
+        const clock = new THREE.Clock();
+        const models = {}; // Chứa các model gốc
+        const moveSpeed = 5;
+        const turnSpeed = 5;
+        let moveInput = { x: 0, y: 0 };
+
+        // 2. TẢI TÀI NGUYÊN (4 FILE CỦA BẠN)
+        function loadModel(name, url) {
+            return new Promise((resolve) => {
+                loader.load(url, (gltf) => {
+                    const model = gltf.scene;
+                    model.traverse(c => { if (c.isMesh) c.castShadow = c.receiveShadow = true; });
+                    models[name] = model; // Lưu mẫu gốc
+                    resolve();
+                }, undefined, (err) => {
+                    console.error("Lỗi tải " + url, err);
+                    resolve(); // Vẫn tiếp tục dù lỗi để không treo game
+                });
+            });
+        }
+
+        Promise.all([
+            loadModel('vip', 'vip.glb'), // Nhân vật
+            loadModel('dat', 'dat.glb'), // Đất
+            loadModel('cay', 'cay.glb'), // Cây
+            loadModel('da', 'da.glb')    // Đá
+        ]).then(() => {
+            document.getElementById('loading').style.display = 'none';
+            initGame();
+        });
+
+        // 3. KHỞI TẠO GAME
+        function initGame() {
+            // A. Tạo Nhân Vật (VIP)
+            if (models.vip) {
+                player = models.vip;
+                scene.add(player);
+                
+                // Xử lý Hoạt ảnh (nếu có)
+                const animations = player.animations || [];
+                if (animations.length > 0) {
+                    mixer = new THREE.AnimationMixer(player);
+                    action = mixer.clipAction(animations[0]); // Chạy hoạt ảnh đầu tiên
+                    action.play();
+                }
+            } else {
+                // Nếu lỗi file vip, tạo khối hộp đỏ tạm
+                const geometry = new THREE.BoxGeometry(1, 2, 1);
+                const material = new THREE.MeshStandardMaterial({ color: 'red' });
+                player = new THREE.Mesh(geometry, material);
+                scene.add(player);
+            }
+
+            // B. Tạo Thế Giới (Map 50x50 ô)
+            createWorld();
+            
+            // C. Bắt đầu vòng lặp game
+            animate();
+        }
+
+        function createWorld() {
+            const worldSize = 20; // Độ rộng thế giới (20x20 ô)
+            const tileSize = 4;   // Kích thước mỗi ô đất (ước lượng)
+            
+            for (let x = -worldSize; x < worldSize; x++) {
+                for (let z = -worldSize; z < worldSize; z++) {
+                    // 1. Đặt Đất
+                    if (models.dat) {
+                        const dat = models.dat.clone();
+                        dat.position.set(x * tileSize, 0, z * tileSize);
+                        // Chỉnh to nhỏ đất nếu cần (scale)
+                        dat.scale.set(3, 3, 3); 
+                        scene.add(dat);
+                    }
+
+                    // 2. Random Cây & Đá (Chỉ đặt ngẫu nhiên)
+                    if (Math.random() > 0.8) { // 20% cơ hội có vật thể
+                        const isTree = Math.random() > 0.5;
+                        const object = isTree ? (models.cay ? models.cay.clone() : null) 
+                                              : (models.da ? models.da.clone() : null);
+                        
+                        if (object) {
+                            object.position.set(x * tileSize, 0, z * tileSize);
+                            // Random kích thước và xoay cho tự nhiên
+                            const scale = 0.5 + Math.random() * 0.5;
+                            object.scale.set(scale, scale, scale);
+                            object.rotation.y = Math.random() * Math.PI * 2;
+                            scene.add(object);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. XỬ LÝ JOYSTICK (CẢM ỨNG)
+        const joyZone = document.getElementById('joystick-zone');
+        const joyKnob = document.getElementById('joystick-knob');
+        let joyTouchId = null;
+        let joyCenter = { x: 0, y: 0 };
+
+        joyZone.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            const touch = e.changedTouches[0];
+            joyTouchId = touch.identifier;
+            const rect = joyZone.getBoundingClientRect();
+            joyCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+            updateJoystick(touch);
+        }, { passive: false });
+
+        joyZone.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                if (e.changedTouches[i].identifier === joyTouchId) {
+                    updateJoystick(e.changedTouches[i]);
+                    break;
+                }
+            }
+        }, { passive: false });
+
+        joyZone.addEventListener('touchend', (e) => {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                if (e.changedTouches[i].identifier === joyTouchId) {
+                    resetJoystick();
+                    break;
+                }
+            }
+        });
+
+        function updateJoystick(touch) {
+            const maxDist = 60; // Bán kính di chuyển nút
+            let dx = touch.clientX - joyCenter.x;
+            let dy = touch.clientY - joyCenter.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            if (dist > maxDist) {
+                const ratio = maxDist / dist;
+                dx *= ratio;
+                dy *= ratio;
+            }
+
+            joyKnob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+            
+            // Tính toán input di chuyển (x, y từ -1 đến 1)
+            moveInput.x = dx / maxDist;
+            moveInput.y = dy / maxDist;
+        }
+
+        function resetJoystick() {
+            joyTouchId = null;
+            joyKnob.style.transform = `translate(-50%, -50%)`;
+            moveInput = { x: 0, y: 0 };
+        }
+
+        // 5. VÒNG LẶP CHÍNH (UPDATE)
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = clock.getDelta();
+
+            if (player) {
+                // Di chuyển nhân vật
+                if (moveInput.x !== 0 || moveInput.y !== 0) {
+                    // Xoay nhân vật theo hướng joystick
+                    const angle = Math.atan2(-moveInput.x, -moveInput.y);
+                    // Làm mượt góc xoay
+                    const targetQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+                    player.quaternion.slerp(targetQ, 0.2);
+
+                    // Tiến về phía trước
+                    const speed = moveSpeed * dt;
+                    player.position.x -= Math.sin(player.rotation.y) * speed;
+                    player.position.z -= Math.cos(player.rotation.y) * speed;
+                    
+                    // Nếu có hoạt ảnh, chạy nhanh hơn (nếu cần xử lý sau)
+                }
+
+                // Camera đi theo (Góc nhìn thứ 3)
+                const camOffset = new THREE.Vector3(0, 5, 8); // Cao 5, lùi 8
+                camOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), 0); // Giữ góc cố định hoặc xoay theo player nếu muốn
+                camera.position.lerp(player.position.clone().add(camOffset), 0.1);
+                camera.lookAt(player.position);
+                
+                // Cập nhật Animation Mixer
+                if (mixer) mixer.update(dt);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Tự chỉnh màn hình khi xoay ngang/dọc
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
